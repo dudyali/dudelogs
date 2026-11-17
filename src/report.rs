@@ -92,6 +92,9 @@ pub fn render_group(g: &FindingGroup) -> String {
         if g.is_new { " · **BARU**" } else { "" }
     );
     let _ = writeln!(s, "Target ({}): {}", g.targets.len(), g.targets.join(", "));
+    if let Some(rule) = &g.plan.rule_id {
+        let _ = writeln!(s, "Rule: `{rule}`");
+    }
     if !g.projects.is_empty() {
         let _ = writeln!(s, "Project: {}", g.projects.join(", "));
     }
@@ -149,6 +152,7 @@ mod tests {
             source: "systemd".into(),
             message: "unit failed: nginx.service".into(),
             unit: "nginx.service".into(),
+            path: "/var/log/nginx/error.log".into(),
             targets: vec!["vm1".into(), "vm2".into()],
             projects: vec!["shop".into()],
             pairs: vec![("vm1".into(), "shop".into())],

@@ -999,6 +999,14 @@ impl DudelogsApp {
                             ui.add_space(4.0);
                             ui.label(egui::RichText::new(r).small().weak());
                         }
+                        ui.label(
+                            egui::RichText::new(match &g.plan.rule_id {
+                                Some(id) => format!("rule: {id}"),
+                                None => "rule: generic".to_string(),
+                            })
+                            .small()
+                            .weak(),
+                        );
                         if g.plan.confidence == "low" {
                             ui.label(
                                 egui::RichText::new("confidence rendah: belum ada rule yang cocok")
@@ -1489,6 +1497,7 @@ mod tests {
             source: "applog".into(),
             message: "boom".into(),
             unit: "api.log".into(),
+            path: "/var/www/app/storage/logs/laravel.log".into(),
             targets: pairs.iter().map(|(c, _)| c.to_string()).collect(),
             projects: pairs
                 .iter()

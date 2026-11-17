@@ -115,6 +115,7 @@ impl Store {
                excerpt TEXT NOT NULL DEFAULT '',
                unit TEXT NOT NULL DEFAULT '',
                event_time TEXT NOT NULL DEFAULT '',
+               path TEXT NOT NULL DEFAULT '',
                solved INTEGER NOT NULL DEFAULT 0,
                last_run_id INTEGER NOT NULL DEFAULT 0,
                first_seen TEXT NOT NULL,
@@ -135,6 +136,7 @@ impl Store {
         // findings lama: history tetap bisa dibuka, dengan nilai default.
         ensure_column(&conn, "findings", "unit", "unit TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "findings", "event_time", "event_time TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&conn, "findings", "path", "path TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "findings", "solved", "solved INTEGER NOT NULL DEFAULT 0")?;
         ensure_column(
             &conn,
@@ -407,11 +409,11 @@ impl Store {
                 f.first_seen = now_ts.to_string();
                 self.conn.execute(
                     "INSERT INTO findings(fingerprint,target,project,source,severity,message,
-                       excerpt,unit,event_time,solved,last_run_id,first_seen,last_seen,occurrences)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0,?10,?11,?11,1)",
+                       excerpt,unit,event_time,path,solved,last_run_id,first_seen,last_seen,occurrences)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?12,1)",
                     params![
                         f.fingerprint, f.target, f.project, f.source, f.severity.as_str(),
-                        f.message, f.excerpt, f.unit, f.event_time, run_id, now_ts
+                        f.message, f.excerpt, f.unit, f.event_time, f.path, run_id, now_ts
                     ],
                 )?;
                 f.is_new = true;
@@ -425,12 +427,13 @@ impl Store {
                 f.solved = solved != 0;
                 self.conn.execute(
                     "UPDATE findings SET occurrences=?3, last_seen=?4, severity=?5, message=?6,
-                     excerpt=?7, project=?8, unit=?9, event_time=?10, last_run_id=?11
+                     excerpt=?7, project=?8, unit=?9, event_time=?10, path=?12,
+                     last_run_id=?11
                      WHERE fingerprint=?1 AND target=?2",
                     params![
                         f.fingerprint, f.target, f.occurrences as i64, now_ts,
                         f.severity.as_str(), f.message, f.excerpt, f.project, f.unit,
-                        f.event_time, run_id
+                        f.event_time, run_id, f.path
                     ],
                 )?;
                 f.is_new = false;
@@ -457,7 +460,7 @@ impl Store {
     fn query_findings(&self, filter: &str) -> Result<Vec<Finding>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT fingerprint,target,project,source,severity,message,excerpt,unit,
-                    event_time,solved,first_seen,last_seen,occurrences
+                    event_time,path,solved,first_seen,last_seen,occurrences
              FROM findings {filter}"
         ))?;
         let rows = stmt
@@ -474,10 +477,11 @@ impl Store {
                     excerpt: r.get(6)?,
                     unit: r.get(7)?,
                     event_time: r.get(8)?,
-                    solved: r.get::<_, i64>(9)? != 0,
-                    first_seen: r.get(10)?,
-                    last_seen: r.get(11)?,
-                    occurrences: r.get::<_, i64>(12)? as u32,
+                    path: r.get(9)?,
+                    solved: r.get::<_, i64>(10)? != 0,
+                    first_seen: r.get(11)?,
+                    last_seen: r.get(12)?,
+                    occurrences: r.get::<_, i64>(13)? as u32,
                     is_new: false,
                 })
             })?

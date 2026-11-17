@@ -90,7 +90,10 @@ async fn db_connections_end_to_end_and_new_flags() {
         .iter()
         .find(|g| g.message.contains("SQLSTATE"))
         .expect("temuan SQLSTATE dari log Laravel");
-    assert_eq!(laravel.plan.rule_id.as_deref(), Some("applog.laravel_db"));
+    assert_eq!(
+        laravel.plan.rule_id.as_deref(),
+        Some("applog.laravel_sqlstate")
+    );
     assert_eq!(laravel.severity, dudelogs::model::Severity::Error);
     assert!(laravel.plan.steps.iter().any(|s| s.contains("DB_HOST")));
     assert!(

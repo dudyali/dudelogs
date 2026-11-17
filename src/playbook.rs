@@ -113,16 +113,28 @@ impl Rules {
                     continue;
                 }
             }
+            let mut captures: BTreeMap<String, String> = BTreeMap::new();
             if let Some(re) = &r.message_regex {
-                if !re.is_match(&f.message) {
+                let Some(caps) = re.captures(&f.message) else {
                     continue;
+                };
+                // named group dari rule jadi variabel template, mis. (?P<proc>...)
+                for name in re.capture_names().flatten() {
+                    if let Some(m) = caps.name(name) {
+                        captures.insert(name.to_lowercase(), m.as_str().to_string());
+                    }
                 }
             }
             return Plan {
                 rule_id: Some(r.def.id.clone()),
-                cause: render(&r.def.cause, f),
-                steps: r.def.steps.iter().map(|s| render(s, f)).collect(),
-                verify: r.def.verify.as_deref().map(|s| render(s, f)),
+                cause: render(&r.def.cause, f, &captures),
+                steps: r
+                    .def
+                    .steps
+                    .iter()
+                    .map(|s| render(s, f, &captures))
+                    .collect(),
+                verify: r.def.verify.as_deref().map(|s| render(s, f, &captures)),
                 risk: r.def.risk.clone(),
                 confidence: "rule",
             };
@@ -133,19 +145,28 @@ impl Rules {
 
 static TEMPLATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*(\w+)\s*\}\}").unwrap());
 
-fn render(template: &str, f: &Finding) -> String {
+fn render(template: &str, f: &Finding, captures: &BTreeMap<String, String>) -> String {
     TEMPLATE
         .replace_all(template, |caps: &regex::Captures| {
             let key = caps[1].to_lowercase();
+            if let Some(value) = captures.get(&key) {
+                return value.clone();
+            }
             match key.as_str() {
                 "unit" => {
-                    if f.unit.is_empty() { "<unit>".to_string() } else { f.unit.clone() }
+                    if f.unit.is_empty() { "unit-terkait".to_string() } else { f.unit.clone() }
                 }
                 "target" => f.target.clone(),
                 "project" => f.project.clone(),
                 "message" => f.message.clone(),
                 "path" => {
-                    if f.unit.is_empty() { "<path>".to_string() } else { f.unit.clone() }
+                    if !f.path.is_empty() {
+                        f.path.clone()
+                    } else if !f.unit.is_empty() {
+                        f.unit.clone()
+                    } else {
+                        "path-terkait".to_string()
+                    }
                 }
                 other => format!("{{{{{other}}}}}"),
             }
@@ -163,6 +184,7 @@ pub fn group(findings: &[Finding], rules: &Rules) -> Vec<FindingGroup> {
             source: f.source.clone(),
             message: f.message.clone(),
             unit: f.unit.clone(),
+            path: f.path.clone(),
             targets: Vec::new(),
             projects: Vec::new(),
             pairs: Vec::new(),
@@ -251,15 +273,86 @@ mod tests {
     }
 
     #[test]
-    fn laravel_sqlstate_gets_db_rule() {
+    fn laravel_sqlstate_gets_specific_rule() {
         let rules = Rules::from_toml(DEFAULT_PLAYBOOK).unwrap();
         let plan = rules.plan_for(&finding(
             "applog",
             "[2026-11-17 10:01:00] production.ERROR: SQLSTATE[HY000] [2002] Connection refused",
             "laravel.log",
         ));
-        assert_eq!(plan.rule_id.as_deref(), Some("applog.laravel_db"));
+        assert_eq!(plan.rule_id.as_deref(), Some("applog.laravel_sqlstate"));
         assert_eq!(plan.confidence, "rule");
+    }
+
+    #[test]
+    fn default_plans_are_concrete_and_use_captures() {
+        let rules = Rules::from_toml(DEFAULT_PLAYBOOK).unwrap();
+        let cases: &[(&str, &str, &str, &str)] = &[
+            ("systemd", "unit failed: nginx.service - web server", "nginx.service", "systemd.failed"),
+            ("docker", "container api (img) Exited (1) 2 hours ago", "api", "docker.exited"),
+            ("docker", "container worker (img) restart loop - Restarting", "worker", "docker.restart_loop"),
+            ("journal", "Out of memory: Killed process 4242 (shop-api) total-vm:1", "kernel", "journal.oom_kill"),
+            ("journal", "Out of memory", "", "journal.oom"),
+            ("journal", "connection refused to redis:6379", "shop-api", "journal.conn_refused"),
+            ("journal", "dial 10.0.0.5:5432: connect: connection refused", "app", "journal.conn_refused_target"),
+            ("journal", "connection refused", "", "journal.connection_refused"),
+            ("journal", "no space left on device", "", "journal.disk_full"),
+            ("journal", "permission denied opening /var/run/app.sock", "nginx", "journal.permission_denied"),
+            ("applog", "production.ERROR: SQLSTATE[HY000] [2002] Connection refused", "laravel.log", "applog.laravel_sqlstate"),
+            ("applog", "production.CRITICAL: Allowed memory size of 134217728 bytes exhausted", "laravel.log", "applog.php_memory"),
+            ("applog", "production.ERROR: something else", "laravel.log", "applog.error"),
+            ("applog", "thread panicked at src/main.rs:10", "laravel.log", "applog.panic"),
+            ("resource", "disk /var terpakai 97%", "/var", "resources.disk"),
+            ("resource", "memory tersedia 2.0%", "mem", "resources.mem"),
+            ("resource", "load 9.00 pada 2 core", "load", "resources.load"),
+        ];
+
+        let placeholder = regex::Regex::new(r"<\s*[A-Za-z][^>]*>").unwrap();
+        let template_left = regex::Regex::new(
+            r"\{\{\s*(unit|path|target|project|proc|host|port|sqlstate|message)\s*\}\}",
+        )
+        .unwrap();
+
+        for (source, message, unit, expected) in cases {
+            let mut f = finding(source, message, unit);
+            f.path = "/var/www/app/storage/logs/laravel.log".into();
+            let plan = rules.plan_for(&f);
+            assert_eq!(plan.rule_id.as_deref(), Some(*expected), "msg={message}");
+            let text = std::iter::once(plan.cause.clone())
+                .chain(plan.steps.iter().cloned())
+                .chain(plan.verify.clone())
+                .collect::<Vec<_>>()
+                .join("
+");
+            assert!(!placeholder.is_match(&text), "{expected} masih placeholder:
+{text}");
+            assert!(!template_left.is_match(&text), "{expected} template belum diganti:
+{text}");
+        }
+
+        // named capture benar-benar disubstitusi
+        let oom = rules.plan_for(&finding(
+            "journal",
+            "Out of memory: Killed process 42 (shop-api) total-vm:1",
+            "kernel",
+        ));
+        assert!(oom.steps.iter().any(|s| s.contains("shop-api")), "{:?}", oom.steps);
+
+        let conn = rules.plan_for(&finding("journal", "connection refused to redis:6379", "app"));
+        assert!(conn.steps.iter().any(|s| s.contains("redis") && s.contains("6379")), "{:?}", conn.steps);
+
+        let sql = rules.plan_for(&finding(
+            "applog",
+            "production.ERROR: SQLSTATE[HY000] [2002] Connection refused",
+            "laravel.log",
+        ));
+        assert!(sql.cause.contains("SQLSTATE[HY000]"), "{}", sql.cause);
+
+        // path log lengkap dipakai, bukan nama file saja
+        let mut f = finding("applog", "production.ERROR: boom", "laravel.log");
+        f.path = "/var/www/app/storage/logs/laravel.log".into();
+        let plan = rules.plan_for(&f);
+        assert!(plan.steps.iter().any(|s| s.contains("/var/www/app/storage/logs/laravel.log")), "{:?}", plan.steps);
     }
 
     #[test]

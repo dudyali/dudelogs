@@ -149,7 +149,8 @@ fn flush(out: &mut Vec<Finding>, rec: Option<Record>, conn: &str, project: &str)
             rec.unit(),
             rec.excerpt(),
         )
-        .with_event_time(rec.event_time()),
+        .with_event_time(rec.event_time())
+            .with_path(rec.file.clone()),
     );
 }
 

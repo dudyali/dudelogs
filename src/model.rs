@@ -61,6 +61,8 @@ pub struct Finding {
     pub severity: Severity,
     pub message: String,
     pub unit: String,
+    /// Path file log asli (untuk template fix plan). Kosong bila bukan applog.
+    pub path: String,
     pub excerpt: String,
     pub occurrences: u32,
     pub first_seen: String,
@@ -96,6 +98,7 @@ impl Finding {
             severity,
             message,
             unit,
+            path: String::new(),
             excerpt,
             occurrences: 1,
             first_seen: String::new(),
@@ -108,6 +111,11 @@ impl Finding {
 
     pub fn with_event_time(mut self, event_time: impl Into<String>) -> Self {
         self.event_time = event_time.into();
+        self
+    }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = path.into();
         self
     }
 }
@@ -157,6 +165,8 @@ pub struct FindingGroup {
     pub source: String,
     pub message: String,
     pub unit: String,
+    /// Path log lengkap (applog); kosong untuk probe host.
+    pub path: String,
     pub targets: Vec<String>,
     pub projects: Vec<String>,
     /// pasangan (koneksi, project) yang terdampak — dipakai filter UI
