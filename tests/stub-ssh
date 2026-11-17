@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Stub `ssh` untuk test: mengabaikan host/opsi, mencetak fixture sesuai perintah.
+set -u
+dir="$(cd "$(dirname "$0")" && pwd)/fixtures"
+cmd="${*: -1}"
+host="${*: -2:1}"
+
+case "$*" in
+  *"-O exit"*) exit 0 ;;
+esac
+
+case "$host" in
+*BOOM*)
+  echo "ssh: connect to host BOOM port 22: Connection refused" >&2
+  exit 255
+  ;;
+esac
+
+case "$cmd" in
+  "true")                 exit 0 ;;
+  *"systemctl --failed"*) cat "$dir/systemctl.txt" ;;
+  *journalctl*)           cat "$dir/journal.jsonl" ;;
+  *"docker ps"*)
+    if [[ "$host" == *nodocker* ]]; then
+      echo "sh: 1: docker: not found" >&2
+      exit 127
+    fi
+    cat "$dir/docker.txt"
+    ;;
+  *"tail -n"*)            cat "$dir/applog.txt" ;;
+  *"df -P"*)              cat "$dir/resources.txt" ;;
+  *notinstalled*)
+    echo "sh: 1: notinstalled: not found" >&2
+    exit 127
+    ;;
+  *ENVDUMP*)
+    echo "REQUIRE=${SSH_ASKPASS_REQUIRE:-none} ASKPASS=${SSH_ASKPASS:+set} PW=${DUDELOGS_SSH_PASSWORD:-none} SOCK=${SSH_AUTH_SOCK:-none} ARGS=$*"
+    ;;
+  *BOOM*)                 echo "ssh: connect to host 10.0.0.99 port 22: Connection refused" >&2; exit 255 ;;
+  *)
+    echo "stub-ssh: perintah tidak dikenal: $cmd" >&2
+    exit 9
+    ;;
+esac

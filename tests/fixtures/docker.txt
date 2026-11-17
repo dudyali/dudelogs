@@ -1,0 +1,3 @@
+api	ghcr.io/shop/api	Exited (1) 2 hours ago
+---
+worker	ghcr.io/shop/worker	Restarting (2) 5 seconds ago

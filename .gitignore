@@ -1,0 +1,8 @@
+/target
+/dudelogs.toml
+/state.db
+/reports
+/raw
+.DS_Store
+
+/dist

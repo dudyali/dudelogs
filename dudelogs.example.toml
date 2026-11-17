@@ -1,0 +1,41 @@
+# Contoh config dudelogs. Copy ke dudelogs.toml atau ~/.dudelogs/dudelogs.toml.
+#
+# Koneksi & project hidup di SQLite (~/.dudelogs/state.db) dan dikelola lewat UI.
+# [[target]] di bawah HANYA dipakai untuk import awal: kalau tabel connections
+# masih kosong, isinya dipindahkan ke DB lalu diabaikan.
+#
+# Semua probe berjalan read-only dan memakai ~/.ssh/config, jadi ProxyJump,
+# IdentityFile, dan agent otomatis ikut.
+
+ssh_bin = "ssh"          # atau DUDELOGS_SSH_BIN
+concurrency = 4          # target/probe paralel maksimum
+probe_timeout_secs = 20
+
+[defaults]
+probes = ["systemd", "journal", "docker", "resources"]
+log_globs = []
+
+[[target]]
+name = "vm-web-01"             # alias pendek, dipakai di UI & report
+ssh = "deploy@10.0.0.11"       # atau alias di ~/.ssh/config
+project = "shop"
+tags = ["prod", "web"]
+probes = ["systemd", "journal", "docker", "resources", "applog"]
+log_globs = ["/var/log/shop/*.log", "/var/log/nginx/error.log"]
+
+[[target]]
+name = "vm-worker-01"
+ssh = "deploy@10.0.0.12"
+project = "shop"
+probes = ["systemd", "journal", "docker", "resources"]
+extra_probes = [
+  { name = "queue", cmd = "tail -n 200 /var/log/shop/queue.log | grep -iE 'error|retry exhausted' || true",
+    severity = "error", group_regex = "worker-(\\w+)" },
+]
+
+[[target]]
+name = "vm-db-01"
+ssh = "dba@10.0.0.20"
+project = "shop"
+probes = ["systemd", "resources", "applog"]
+log_globs = ["/var/log/postgresql/*.log"]

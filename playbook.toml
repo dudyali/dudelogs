@@ -1,0 +1,214 @@
+# Playbook bawaan dudelogs.
+# Rule dicocokkan berurutan (first match menang), jadi taruh yang paling spesifik di atas.
+# Template: {{unit}}, {{target}}, {{project}}, {{message}}, {{path}} (= {{unit}}).
+
+[[rule]]
+id = "journal.disk_full"
+match = { source = "journal", message_regex = "(?i)no space left on device" }
+severity_min = "error"
+cause = "Filesystem penuh di target, penulisan gagal. Bisa juga inode habis."
+steps = [
+  "df -h; df -i",
+  "du -xh --max-depth=1 / 2>/dev/null | sort -h | tail -20",
+  "bersihkan log lama yang aman: journalctl --vacuum-size=500M",
+  "cek container/image dangling: docker system df",
+]
+verify = "df -h /"
+risk = "high - hapus hanya file yang kamu kenali"
+
+[[rule]]
+id = "journal.panic"
+match = { source = "journal", message_regex = "(?i)\\bpanic\\b|kernel panic" }
+severity_min = "critical"
+cause = "Kernel atau proses panic. Proses mati di tengah jalan, state bisa korup."
+steps = [
+  "journalctl -k -b -1 -p 3 --no-pager | tail -100 (boot sebelumnya)",
+  "cat /proc/sys/kernel/panic_on_oops; dmesg -T | tail -100",
+  "cek hardware/memory: dmesg -T | grep -iE 'mce|machine check|oom'",
+  "kalau aplikasi: jalankan ulang dengan backtrace (RUST_BACKTRACE=1) di staging",
+]
+verify = "systemctl is-system-running"
+risk = "high - reboot hanya setelah bukti terkumpul"
+
+[[rule]]
+id = "journal.oom"
+match = { source = "journal", message_regex = "(?i)out of memory|oom-kill|oom_reaper" }
+severity_min = "error"
+cause = "OOM killer membunuh proses: memori host habis, atau limit cgroup service terlalu kecil."
+steps = [
+  "free -m; cat /proc/meminfo | grep -E 'MemAvailable|SwapTotal'",
+  "journalctl -k --since '-30 min' --no-pager | grep -i -A3 'out of memory'",
+  "cek limit: systemctl show {{unit}} -p MemoryMax -p MemoryHigh",
+  "identifikasi pemakan memori: ps -eo pid,rss,comm --sort=-rss | head -10",
+  "naikkan MemoryMax atau kurangi worker/queue {{project}}; pertimbangkan swap",
+]
+verify = "systemctl status {{unit}} --no-pager | head -5"
+risk = "medium - perubahan limit perlu restart service"
+
+[[rule]]
+id = "journal.connection_refused"
+match = { source = "journal", message_regex = "(?i)connection refused|ECONNREFUSED" }
+severity_min = "error"
+cause = "Proses gagal konek ke dependency: service tujuan mati, bind ke localhost saja, atau port beda."
+steps = [
+  "cek dependency di host yang sama: ss -ltnp | grep -E ':(80|443|5432|6379|8080)'",
+  "systemctl --failed; docker ps -a --filter status=exited",
+  "uji dari target: curl -sS -m 3 http://127.0.0.1:<port>/health",
+  "cocokkan host/port di config {{project}} dengan hasil `ss -ltnp`",
+]
+verify = "curl -sS -m 3 http://127.0.0.1:<port>/health"
+risk = "low"
+
+[[rule]]
+id = "journal.permission_denied"
+match = { source = "journal", message_regex = "(?i)permission denied|EACCES" }
+severity_min = "error"
+cause = "Akses file/direktori/socket ditolak: owner atau mode berubah, atau proses jalan sebagai user salah."
+steps = [
+  "cek user proses: systemctl show {{unit}} -p User -p Group",
+  "cek path dari error: namei -l <path>",
+  "bandingkan owner/mode dengan service lain yang berjalan",
+  "perbaiki owner/mode di config deployment, bukan chmod 777",
+]
+verify = "sudo -u <user> test -r <path> && echo ok"
+risk = "medium"
+
+[[rule]]
+id = "systemd.failed"
+match = { source = "systemd" }
+cause = "Unit systemd gagal start atau berhenti. Umumnya config invalid, port terpakai, dependency belum siap, atau exit non-zero saat startup."
+steps = [
+  "systemctl status {{unit}} -l --no-pager",
+  "journalctl -u {{unit}} -n 200 --no-pager -p 3",
+  "cek perubahan config terakhir: ls -l --time-style=long-iso /etc/systemd/system/{{unit}}*",
+  "cek port bentrok: ss -ltnp | grep -F <port>",
+  "jalankan binary langsung (systemd-run --pty) kalau error tidak informatif",
+]
+verify = "systemctl is-active {{unit}}"
+risk = "medium - restart unit produksi {{target}}"
+
+[[rule]]
+id = "docker.exited"
+match = { source = "docker", message_regex = "(?i)exited" }
+severity_min = "warning"
+cause = "Container berhenti dengan exit code non-zero. Kalau exit 0, kemungkinan memang one-shot job."
+steps = [
+  "docker inspect --format '{{.State.ExitCode}} {{.Config.Cmd}}' <container>",
+  "docker logs --tail 100 <container>",
+  "cek healthcheck: docker inspect --format '{{json .State.Health}}' <container>",
+  "bandingkan env/config dengan container serupa yang sehat",
+]
+verify = "docker ps --filter name=<container> --format '{{.Status}}'"
+risk = "low"
+
+[[rule]]
+id = "docker.restart_loop"
+match = { source = "docker", message_regex = "(?i)restart loop" }
+severity_min = "error"
+cause = "Container restart terus-menerus: aplikasi crash saat startup, atau dependency belum siap."
+steps = [
+  "docker logs --tail 200 <container>",
+  "docker inspect --format '{{.RestartCount}} {{.State.ExitCode}}' <container>",
+  "hentikan sementara loop saat investigasi: docker update --restart=no <container>",
+  "cek resource limit & env wajib yang kosong",
+]
+verify = "docker ps --filter name=<container> --format '{{.Status}}'"
+risk = "medium"
+
+[[rule]]
+id = "applog.panic"
+match = { source = "applog", message_regex = "(?i)panic|fatal" }
+severity_min = "critical"
+cause = "Aplikasi crash (panic/fatal). Biasanya bug atau input tak terduga, bukan masalah infra."
+steps = [
+  "ambil backtrace & 50 baris sebelum baris panic dari {{path}}",
+  "cek versi deploy terakhir: git log / image tag di {{project}}",
+  "reproduksi di staging dengan input yang sama",
+  "rollback ke versi sebelumnya bila frekuensi naik setelah deploy",
+]
+verify = "curl -sS -m 3 http://127.0.0.1:<port>/health"
+risk = "high"
+
+[[rule]]
+id = "applog.laravel_db"
+match = { source = "applog", message_regex = "(?i)SQLSTATE|database.*(connection refused|gone away)" }
+severity_min = "error"
+cause = "Laravel gagal konek/query ke database (SQLSTATE). Umumnya kredensial .env salah, DB mati, atau jaringan/port tertutup."
+steps = [
+  "cek dari VM: mysql -h <DB_HOST> -P <DB_PORT> -u <DB_USER> -p -e 'select 1' (atau psql -h ... -c 'select 1')",
+  "bandingkan DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME di .env {{project}} dengan kondisi server DB",
+  "systemctl status mysql mariadb postgresql --no-pager; ss -ltnp | grep -E ':(3306|5432)'",
+  "journalctl -u mysql -u mariadb -u postgresql -n 100 --no-pager -p 3",
+  "setelah .env berubah: php <base>/artisan config:clear && php <base>/artisan cache:clear",
+]
+verify = "php <base>/artisan migrate:status"
+risk = "high - cek dulu DB dari host lain sebelum restart apa pun"
+
+[[rule]]
+id = "applog.php_memory"
+match = { source = "applog", message_regex = "(?i)Allowed memory size.*exhausted|memory_limit" }
+severity_min = "critical"
+cause = "PHP kehabisan memory_limit saat request/queue. Bisa query besar, loop tak berujung, atau limit terlalu kecil."
+steps = [
+  "cek limit aktif: php -i | grep -E 'memory_limit|max_execution_time'",
+  "cari lokasi error di stack trace (file + baris) dan cek query/collection yang memuat banyak data",
+  "naikkan memory_limit PHP-FPM (pool www) atau memory_limit CLI untuk queue worker",
+  "restart php-fpm/queue setelah config berubah",
+]
+verify = "php -r 'echo ini_get(\"memory_limit\");'"
+risk = "medium - naikkan limit sebagai tindakan sementara, bukan solusi"
+
+[[rule]]
+id = "applog.error"
+match = { source = "applog" }
+cause = "Log aplikasi memuat ERROR/failed. Bisa efek samping (retry yang akhirnya sukses) atau gejala masalah nyata."
+steps = [
+  "ambil 200 baris sekitar error pertama di {{path}}",
+  "cari pola berulang: sort | uniq -c | sort -rn",
+  "cek dependency eksternal (DB/queue/API) pada jam yang sama di journal",
+  "kalau error berulang tanpa efek: turunkan level log atau perbaiki pesannya",
+]
+verify = "tail -n 50 {{path}} | grep -c ERROR"
+risk = "low"
+
+[[rule]]
+id = "resources.disk"
+match = { source = "resource", message_regex = "(?i)^disk " }
+severity_min = "warning"
+cause = "Disk hampir penuh. Kalau dibiarkan, write gagal dan service ikut mati."
+steps = [
+  "df -h {{path}}",
+  "du -xh --max-depth=2 {{path}} 2>/dev/null | sort -h | tail -15",
+  "rotasi/kompres log: logrotate -f /etc/logrotate.conf",
+  "hapus image/container lama: docker system prune -af (hati-hati)",
+]
+verify = "df -h {{path}}"
+risk = "medium"
+
+[[rule]]
+id = "resources.mem"
+match = { source = "resource", message_regex = "(?i)^memory " }
+severity_min = "warning"
+cause = "Memori tersisa sangat sedikit; OOM killer bisa aktif kapan saja."
+steps = [
+  "free -m; ps -eo pid,rss,comm --sort=-rss | head -10",
+  "cat /proc/pressure/memory",
+  "cek jumlah worker/queue di {{project}}",
+  "kurangi konkurensi atau tambah memory/swap",
+]
+verify = "free -m"
+risk = "medium"
+
+[[rule]]
+id = "resources.load"
+match = { source = "resource", message_regex = "(?i)^load " }
+severity_min = "warning"
+cause = "Load average jauh di atas jumlah core: antrian proses menumpuk (I/O atau CPU)."
+steps = [
+  "uptime; vmstat 1 5; iostat -xz 1 3",
+  "ps -eo pid,stat,pcpu,pmem,comm --sort=-pcpu | head -10",
+  "cek disk latency & swap: cat /proc/pressure/io",
+  "identifikasi cron/batch yang tumpang tindih dengan jam sibuk",
+]
+verify = "uptime"
+risk = "low"

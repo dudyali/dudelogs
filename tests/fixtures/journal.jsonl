@@ -1,0 +1,4 @@
+{"PRIORITY":"3","MESSAGE":"upstream timed out (110: Connection timed out) while reading response header from upstream","_SYSTEMD_UNIT":"nginx.service"}
+{"PRIORITY":"2","MESSAGE":"Out of memory: Killed process 4242 (shop-api) total-vm:1048576kB","_SYSTEMD_UNIT":"kernel.service"}
+{"PRIORITY":"3","MESSAGE":"2026-11-17T10:55:01Z connection refused to redis:6379","SYSLOG_IDENTIFIER":"shop-api"}
+{"PRIORITY":"6","MESSAGE":"Started Session 91 of user deploy.","_SYSTEMD_UNIT":"systemd-logind.service"}

@@ -1,0 +1,8 @@
+==> /var/log/shop/api.log <==
+2026-11-17 10:00:01 ERROR db timeout after 5s
+2026-11-17 10:00:02 ERROR retry exhausted for order 8812
+==> /var/log/shop/worker.log <==
+thread 'main' panicked at src/main.rs:10:5
+[2026-11-17 10:01:00] production.ERROR: SQLSTATE[HY000] [2002] Connection refused {"exception":"[object] (PDOException(code: 2002): SQLSTATE[HY000] [2002] Connection refused at /var/www/app/vendor/laravel/framework/src/Illuminate/Database/Connection.php:760)"}
+#0 /var/www/app/vendor/laravel/framework/src/Illuminate/Database/Connection.php(760): PDO->__construct()
+#1 {main}

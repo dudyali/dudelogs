@@ -1,0 +1,9 @@
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/vda1 41152736 100000 40000000 2% /
+/dev/vdb1 41152736 40000000 1152736 97% /var
+---
+MemTotal: 2048000 kB
+MemAvailable: 1536000 kB
+---
+0.10 0.20 0.30 1/100 999
+4

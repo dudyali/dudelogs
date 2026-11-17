@@ -1,0 +1,29 @@
+[package]
+name = "dudelogs"
+version = "0.1.0"
+edition = "2021"
+description = "Fetch errors from VMs over SSH and turn them into fix plans"
+
+[lib]
+name = "dudelogs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dudelogs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+chrono = "0.4"
+eframe = "0.29"
+egui = "0.29"
+regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }
+toml = "0.8"
+
+[profile.dev]
+opt-level = 1
