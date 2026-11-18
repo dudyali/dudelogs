@@ -131,7 +131,7 @@ impl Store {
                unit TEXT NOT NULL DEFAULT '',
                event_time TEXT NOT NULL DEFAULT '',
                path TEXT NOT NULL DEFAULT '',
-               solved INTEGER NOT NULL DEFAULT 0,
+               reviewed INTEGER NOT NULL DEFAULT 0,
                last_run_id INTEGER NOT NULL DEFAULT 0,
                first_seen TEXT NOT NULL,
                last_seen TEXT NOT NULL,
@@ -152,7 +152,18 @@ impl Store {
         ensure_column(&conn, "findings", "unit", "unit TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "findings", "event_time", "event_time TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "findings", "path", "path TEXT NOT NULL DEFAULT ''")?;
-        ensure_column(&conn, "findings", "solved", "solved INTEGER NOT NULL DEFAULT 0")?;
+        // DB lama memakai kolom `solved`; rename agar flag user tidak hilang.
+        if column_exists(&conn, "findings", "solved")?
+            && !column_exists(&conn, "findings", "reviewed")?
+        {
+            conn.execute_batch("ALTER TABLE findings RENAME COLUMN solved TO reviewed")?;
+        }
+        ensure_column(
+            &conn,
+            "findings",
+            "reviewed",
+            "reviewed INTEGER NOT NULL DEFAULT 0",
+        )?;
         ensure_column(
             &conn,
             "findings",
@@ -411,7 +422,7 @@ impl Store {
         let existing: Option<(i64, String, i64)> = self
             .conn
             .query_row(
-                "SELECT occurrences, first_seen, solved FROM findings
+                "SELECT occurrences, first_seen, reviewed FROM findings
                  WHERE fingerprint=?1 AND target=?2",
                 params![f.fingerprint, f.target],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -424,7 +435,7 @@ impl Store {
                 f.first_seen = now_ts.to_string();
                 self.conn.execute(
                     "INSERT INTO findings(fingerprint,target,project,source,severity,message,
-                       excerpt,unit,event_time,path,solved,last_run_id,first_seen,last_seen,occurrences)
+                       excerpt,unit,event_time,path,reviewed,last_run_id,first_seen,last_seen,occurrences)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?12,1)",
                     params![
                         f.fingerprint, f.target, f.project, f.source, f.severity.as_str(),
@@ -432,14 +443,14 @@ impl Store {
                     ],
                 )?;
                 f.is_new = true;
-                f.solved = false;
+                f.reviewed = false;
                 Ok(true)
             }
-            Some((occ, first_seen, solved)) => {
+            Some((occ, first_seen, reviewed)) => {
                 f.occurrences = occ as u32 + 1;
                 f.first_seen = first_seen;
-                // status solved milik user: sync ulang tidak boleh menghapusnya
-                f.solved = solved != 0;
+                // status reviewed milik user: sync ulang tidak boleh menghapusnya
+                f.reviewed = reviewed != 0;
                 self.conn.execute(
                     "UPDATE findings SET occurrences=?3, last_seen=?4, severity=?5, message=?6,
                      excerpt=?7, project=?8, unit=?9, event_time=?10, path=?12,
@@ -475,7 +486,7 @@ impl Store {
     fn query_findings(&self, filter: &str) -> Result<Vec<Finding>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT fingerprint,target,project,source,severity,message,excerpt,unit,
-                    event_time,path,solved,first_seen,last_seen,occurrences
+                    event_time,path,reviewed,first_seen,last_seen,occurrences
              FROM findings {filter}"
         ))?;
         let rows = stmt
@@ -493,7 +504,7 @@ impl Store {
                     unit: r.get(7)?,
                     event_time: r.get(8)?,
                     path: r.get(9)?,
-                    solved: r.get::<_, i64>(10)? != 0,
+                    reviewed: r.get::<_, i64>(10)? != 0,
                     first_seen: r.get(11)?,
                     last_seen: r.get(12)?,
                     occurrences: r.get::<_, i64>(13)? as u32,
@@ -504,10 +515,10 @@ impl Store {
         Ok(rows)
     }
 
-    pub fn set_solved(&mut self, fingerprint: &str, solved: bool) -> Result<usize> {
+    pub fn set_reviewed(&mut self, fingerprint: &str, reviewed: bool) -> Result<usize> {
         let n = self.conn.execute(
-            "UPDATE findings SET solved=?2 WHERE fingerprint=?1",
-            params![fingerprint, solved as i64],
+            "UPDATE findings SET reviewed=?2 WHERE fingerprint=?1",
+            params![fingerprint, reviewed as i64],
         )?;
         Ok(n)
     }
@@ -517,13 +528,17 @@ pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
-fn ensure_column(conn: &SqlConnection, table: &str, column: &str, ddl: &str) -> Result<()> {
+fn column_exists(conn: &SqlConnection, table: &str, column: &str) -> Result<bool> {
     let exists: i64 = conn.query_row(
         &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name=?1"),
         params![column],
         |r| r.get(0),
     )?;
-    if exists == 0 {
+    Ok(exists > 0)
+}
+
+fn ensure_column(conn: &SqlConnection, table: &str, column: &str, ddl: &str) -> Result<()> {
+    if !column_exists(conn, table, column)? {
         conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {ddl}"))?;
     }
     Ok(())
@@ -682,7 +697,40 @@ mod tests {
     }
 
     #[test]
-    fn findings_history_and_solved_flag() {
+    fn migrates_solved_column_to_reviewed() {
+        let dir = unique_dir("dudelogs-reviewed-migrate");
+        let db = dir.join("state.db");
+        {
+            let c = rusqlite::Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE findings(
+                   fingerprint TEXT NOT NULL,
+                   target TEXT NOT NULL,
+                   project TEXT NOT NULL,
+                   source TEXT NOT NULL,
+                   severity TEXT NOT NULL,
+                   message TEXT NOT NULL,
+                   excerpt TEXT NOT NULL DEFAULT '',
+                   first_seen TEXT NOT NULL,
+                   last_seen TEXT NOT NULL,
+                   occurrences INTEGER NOT NULL DEFAULT 1,
+                   solved INTEGER NOT NULL DEFAULT 0,
+                   PRIMARY KEY(fingerprint, target)
+                 );
+                 INSERT INTO findings(fingerprint,target,project,source,severity,message,first_seen,last_seen,occurrences,solved)
+                 VALUES('fp1','vm1','shop','applog','error','boom','t','t',1,1);",
+            )
+            .unwrap();
+        }
+        let store = Store::open(&db).unwrap();
+        let rows = store.load_all_findings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].reviewed, "flag solved lama harus jadi reviewed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn findings_history_and_reviewed_flag() {
         let (mut s, dir) = temp_store();
         let run1 = s.begin_run("2026-11-17 10:00:05 UTC").unwrap();
         let mut f = Finding::new("vm1", "shop", "applog", crate::model::Severity::Error, "boom", "api.log", "boom");
@@ -693,19 +741,19 @@ mod tests {
         let loaded = s.load_latest_findings().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].event_time, "2026-11-17 10:00:00");
-        assert!(!loaded[0].solved);
+        assert!(!loaded[0].reviewed);
 
-        assert_eq!(s.set_solved(&f.fingerprint, true).unwrap(), 1);
-        assert!(s.load_latest_findings().unwrap()[0].solved);
+        assert_eq!(s.set_reviewed(&f.fingerprint, true).unwrap(), 1);
+        assert!(s.load_latest_findings().unwrap()[0].reviewed);
 
-        // muncul lagi di sync berikutnya -> status solved TETAP
+        // muncul lagi di sync berikutnya -> status reviewed TETAP
         let run2 = s.begin_run("2026-11-17 11:00:00 UTC").unwrap();
         let mut again = Finding::new("vm1", "shop", "applog", crate::model::Severity::Error, "boom", "api.log", "boom");
         again.event_time = "2026-11-17 10:00:00".into();
         s.upsert(&mut again, run2, "2026-11-17 11:00:00 UTC").unwrap();
         s.finish_run(run2, "completed", 1, 0).unwrap();
         let loaded = s.load_latest_findings().unwrap();
-        assert!(loaded[0].solved, "sync ulang tidak boleh menghapus solved");
+        assert!(loaded[0].reviewed, "sync ulang tidak boleh menghapus reviewed");
         assert_eq!(loaded[0].occurrences, 2);
 
         // temuan yang tidak muncul lagi di run berikutnya tidak ikut tampil

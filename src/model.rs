@@ -70,7 +70,7 @@ pub struct Finding {
     /// Waktu dari log/event itu sendiri (kosong bila sumber tidak menyediakan).
     pub event_time: String,
     /// Ditandai selesai oleh user; sync berikutnya membuka lagi bila masih muncul.
-    pub solved: bool,
+    pub reviewed: bool,
     pub is_new: bool,
 }
 
@@ -104,7 +104,7 @@ impl Finding {
             first_seen: String::new(),
             last_seen: String::new(),
             event_time: String::new(),
-            solved: false,
+            reviewed: false,
             is_new: false,
         }
     }
@@ -178,7 +178,7 @@ pub struct FindingGroup {
     /// Waktu kejadian dari log; fallback ke `first_seen` bila kosong.
     pub event_time: String,
     /// true bila semua baris (target) untuk fingerprint ini sudah ditandai selesai.
-    pub solved: bool,
+    pub reviewed: bool,
     pub excerpt: String,
     pub plan: Plan,
 }

@@ -145,7 +145,7 @@ struct DudelogsApp {
     /// fingerprint yang ditampilkan di panel detail
     active: Option<String>,
     new_only: bool,
-    hide_solved: bool,
+    hide_reviewed: bool,
     /// None = urut severity (bawaan), Some(true) = tanggal terbaru dulu.
     date_sort: Option<bool>,
     min_severity: Severity,
@@ -202,7 +202,7 @@ impl DudelogsApp {
             selection: Vec::new(),
             active: None,
             new_only: false,
-            hide_solved: false,
+            hide_reviewed: false,
             date_sort: None,
             min_severity: Severity::Info,
             copy_flash: None,
@@ -212,7 +212,7 @@ impl DudelogsApp {
     }
 
     /// Tampilkan temuan yang sudah tersimpan di SQLite (bertahan walau app ditutup
-    /// atau di-install ulang). Dipakai saat start dan setelah menandai solved.
+    /// atau di-install ulang). Dipakai saat start dan setelah menandai reviewed.
     fn reload_history(&mut self) {
         match self.store.load_latest_findings() {
             Ok(findings) => {
@@ -915,7 +915,7 @@ impl DudelogsApp {
             .map(|t| t.elapsed() < Duration::from_secs(2))
             .unwrap_or(false);
         let mut copied = false;
-        let mut toggle_solved: Option<(String, bool)> = None;
+        let mut toggle_reviewed: Option<(String, bool)> = None;
 
         egui::SidePanel::right("detail")
             .resizable(true)
@@ -942,9 +942,9 @@ impl DudelogsApp {
                                 .color(g.severity.color()),
                         );
                         ui.label(egui::RichText::new(&g.message).strong());
-                        if g.solved {
+                        if g.reviewed {
                             ui.label(
-                                egui::RichText::new("SOLVED — ditandai selesai")
+                                egui::RichText::new("REVIEWED - sudah ditinjau")
                                     .small()
                                     .color(egui::Color32::from_rgb(110, 190, 120)),
                             );
@@ -1017,16 +1017,28 @@ impl DudelogsApp {
                         }
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            let solve_label = if g.solved {
+                            let solve_label = if g.reviewed {
                                 "Buka lagi"
                             } else {
-                                "Tandai solved"
+                                "Tandai reviewed"
                             };
                             if ui.button(solve_label).clicked() {
-                                toggle_solved = Some((g.fingerprint.clone(), !g.solved));
+                                toggle_reviewed = Some((g.fingerprint.clone(), !g.reviewed));
                             }
-                            if ui.button("Copy markdown").clicked() {
+                            if ui
+                                .button("Copy lengkap")
+                                .on_hover_text("markdown + fix plan")
+                                .clicked()
+                            {
                                 ui.ctx().copy_text(crate::report::render_group(g));
+                                copied = true;
+                            }
+                            if ui
+                                .button("Copy tanpa plan")
+                                .on_hover_text("hanya temuan + evidence, siap ditempel ke agent lain")
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(crate::report::render_finding(g));
                                 copied = true;
                             }
                             if flash {
@@ -1050,16 +1062,16 @@ impl DudelogsApp {
         if copied {
             self.copy_flash = Some(Instant::now());
         }
-        if let Some((fingerprint, solved)) = toggle_solved {
-            match self.store.set_solved(&fingerprint, solved) {
+        if let Some((fingerprint, reviewed)) = toggle_reviewed {
+            match self.store.set_reviewed(&fingerprint, reviewed) {
                 Ok(n) => {
                     self.reload_history();
                     self.status = format!(
                         "{n} temuan ditandai {}",
-                        if solved { "solved" } else { "belum selesai" }
+                        if reviewed { "reviewed" } else { "belum selesai" }
                     );
                 }
-                Err(e) => self.status = format!("gagal update solved: {e}"),
+                Err(e) => self.status = format!("gagal update reviewed: {e}"),
             }
         }
     }
@@ -1104,7 +1116,7 @@ impl DudelogsApp {
 
     fn central(&mut self, ctx: &egui::Context) {
         let filter_new = self.new_only;
-        let hide_solved = self.hide_solved;
+        let hide_reviewed = self.hide_reviewed;
         let min_sev = self.min_severity;
         let filter = self.filter.clone();
         let mut clicked: Option<(String, bool)> = None;
@@ -1138,7 +1150,7 @@ impl DudelogsApp {
                 );
                 ui.separator();
                 ui.checkbox(&mut self.new_only, "baru saja");
-                ui.checkbox(&mut self.hide_solved, "sembunyikan solved");
+                ui.checkbox(&mut self.hide_reviewed, "sembunyikan reviewed");
                 egui::ComboBox::from_id_salt("project-filter")
                     .selected_text(match &filter {
                         Filter::All => "Semua project".to_string(),
@@ -1178,7 +1190,7 @@ impl DudelogsApp {
                     ui.label(
                         egui::RichText::new(format!("{} dipilih", self.selection.len())).small(),
                     );
-                    if ui.button("Tandai solved").clicked() {
+                    if ui.button("Tandai reviewed").clicked() {
                         bulk_solve = true;
                     }
                     if ui.small_button("batal").clicked() {
@@ -1233,7 +1245,7 @@ impl DudelogsApp {
                         if filter_new && !g.is_new {
                             continue;
                         }
-                        if hide_solved && g.solved {
+                        if hide_reviewed && g.reviewed {
                             continue;
                         }
                         if g.severity < min_sev {
@@ -1242,8 +1254,8 @@ impl DudelogsApp {
                         shown += 1;
                         let selected =
                             self.selection.iter().any(|fp| fp == &g.fingerprint);
-                        let tag = if g.solved {
-                            "SOLVED"
+                        let tag = if g.reviewed {
+                            "REVIEWED"
                         } else if g.is_new {
                             "NEW"
                         } else {
@@ -1260,7 +1272,7 @@ impl DudelogsApp {
                         );
                         let color = if selected {
                             egui::Color32::from_rgb(230, 230, 230)
-                        } else if g.solved {
+                        } else if g.reviewed {
                             egui::Color32::GRAY
                         } else {
                             g.severity.color()
@@ -1297,7 +1309,7 @@ impl DudelogsApp {
                 .filter(|g| {
                     matches_filter(&filter, g)
                         && (!filter_new || g.is_new)
-                        && !(hide_solved && g.solved)
+                        && !(hide_reviewed && g.reviewed)
                         && g.severity >= min_sev
                 })
                 .map(|g| g.fingerprint.clone())
@@ -1312,12 +1324,12 @@ impl DudelogsApp {
             let fps = self.selection.clone();
             let mut n = 0usize;
             for fp in &fps {
-                if let Ok(k) = self.store.set_solved(fp, true) {
+                if let Ok(k) = self.store.set_reviewed(fp, true) {
                     n += k;
                 }
             }
             self.reload_history();
-            self.status = format!("{n} temuan ditandai solved");
+            self.status = format!("{n} temuan ditandai reviewed");
         }
         if let Some((fp, multi)) = clicked {
             if multi {
@@ -1551,7 +1563,7 @@ mod tests {
             first_seen: String::new(),
             last_seen: String::new(),
             event_time: String::new(),
-            solved: false,
+            reviewed: false,
             excerpt: String::new(),
             plan: Plan::generic(),
         }

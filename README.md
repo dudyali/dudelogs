@@ -14,16 +14,17 @@ read-only dan berjalan dari mesin ini. Koneksi & project disimpan di **SQLite lo
 2. Di VM itu → **+ project** → isi nama project + path log (satu per baris) dan/atau
    perintah read-only tambahan.
 3. Klik **Sync all** (semua VM) atau **sync** di satu VM.
-4. Pilih temuan di tabel tengah → panel kanan berisi fix plan → **Copy markdown**,
-   atau **Tandai solved** setelah diperbaiki.
+4. Pilih temuan di tabel tengah → panel kanan berisi fix plan → **Copy lengkap**
+   (dengan plan) atau **Copy tanpa plan** (temuan + evidence saja, untuk agent lain),
+   atau **Tandai reviewed** setelah ditinjau/ditriase.
 5. Tabel punya kolom **Tanggal** (waktu dari log; fallback waktu pertama terdeteksi),
    dropdown **project**, filter severity, dan tombol "baru saja".
 6. Urutkan: klik tombol `urut: severity` → `tanggal: terbaru` → `tanggal: terlama`.
    Filter project juga bisa diklik dari panel kiri.
-7. Temuan yang sudah ditandai solved tampil abu-abu dengan label **SOLVED**; centang
-   "sembunyikan solved" untuk menyembunyikannya.
+7. Temuan yang sudah ditandai reviewed tampil abu-abu dengan label **REVIEWED**; centang
+   "sembunyikan reviewed" untuk menyembunyikannya.
 8. Pilih banyak baris: klik = satu baris, **cmd/ctrl/shift+klik** = tambah/kurangi pilihan,
-   **pilih semua** = semua yang lolos filter. Lalu klik **Tandai solved** untuk massal.
+   **pilih semua** = semua yang lolos filter. Lalu klik **Tandai reviewed** untuk massal.
 6. Report markdown tiap run tersimpan di `~/.dudelogs/reports/`.
 
 ## Prasyarat
@@ -98,24 +99,24 @@ Skema:
 | `connections` | id, name (unik), host, user, port, identity_file, auth_method (`key`/`password`), password, probes (dipilih per VM) |
 | `projects` | id, connection_id (cascade), name, log_paths (newline), extra_cmd |
 | `runs` | id, started_at, finished_at, status, targets_ok/fail |
-| `findings` | fingerprint, target, project, source, severity, message, excerpt, unit, event_time, first_seen, last_seen, occurrences, solved, last_run_id (PK: fingerprint+target) |
+| `findings` | fingerprint, target, project, source, severity, message, excerpt, unit, event_time, first_seen, last_seen, occurrences, reviewed, last_run_id (PK: fingerprint+target) |
 
 `fingerprint` = hash dari `source + project + unit + message` setelah timestamp, pid, uuid,
 hex, dan IP dibuang. Error yang sama di beberapa VM = satu baris dengan beberapa target;
 project berbeda = baris terpisah (supaya filter project akurat). `findings` dipakai untuk
 menandai **NEW** vs sudah dikenal dan menghitung `occurrences`.
 
-### History & solved
+### History & reviewed
 
 - Saat app dibuka, tabel langsung memuat temuan dari **run terakhir** (`last_run_id`),
   jadi hasil sync tidak hilang walau app ditutup, dihapus dari Applications, atau
   di-install ulang. Sync ulang tidak wajib untuk melihat data lama.
 - Temuan yang tidak muncul lagi di sync berikutnya tidak ditampilkan sebagai temuan aktif,
   tetapi barisnya tetap ada di DB (history penuh bisa dibaca dengan `sqlite3 state.db`).
-- **Tandai solved** menulis `solved=1` ke DB dan **tidak dihapus oleh sync berikutnya**.
-  Sync hanya meng-*append*/update: `occurrences` dan `last_seen` bertambah, status solved
+- **Tandai reviewed** menulis `reviewed=1` ke DB dan **tidak dihapus oleh sync berikutnya**. Artinya "sudah ditinjau/ditriase", bukan klaim bahwa error sudah pasti beres (app tidak bisa memverifikasi itu).
+  Sync hanya meng-*append*/update: `occurrences` dan `last_seen` bertambah, status reviewed
   tetap seperti yang kamu set. Untuk membuka kembali, klik **Buka lagi**.
-- Karena solved tidak auto-reopen, kalau error yang sudah solved muncul lagi, barisnya
+- Karena reviewed tidak auto-reopen, kalau error yang sudah reviewed muncul lagi, barisnya
   tetap abu-abu — cek kolom "terakhir" di panel detail bila ingin memastikan. (Kalau mau
   perilaku auto-reopen, bilang saja; tinggal ubah satu baris di `upsert`.)
 - Hapus aplikasi (`/Applications/dudelogs.app`) hanya menghapus binary. Data tetap di
@@ -309,3 +310,4 @@ digunakan test agar tidak mengotori `~/.dudelogs`.
 | Semua probe satu VM gagal dengan satu pesan `koneksi: ...` | Itu kegagalan sesi (auth/transpor) saat membuat master — perbaiki koneksi, bukan masing-masing probe. |
 | `docker: not found` / exit 127 | Tool tidak terpasang. Probe otomatis dilewati dan dicatat di report; matikan checkbox `docker` di form VM agar tidak dicoba sama sekali. |
 | DB lama tidak punya kolom auth | Tidak perlu aksi: kolom `auth_method`/`password` ditambahkan otomatis saat app dibuka. |
+| DB lama masih memakai flag `solved` | Otomatis di-rename jadi `reviewed` saat app dibuka; nilai flag lama tetap. |

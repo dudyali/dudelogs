@@ -168,7 +168,7 @@ async fn password_auth_uses_askpass_env_not_batchmode() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn history_survives_restart_and_solved_stays_after_resync() {
+async fn history_survives_restart_and_reviewed_stays_after_resync() {
     let (home, cfg, rules) = setup();
     let paths = Paths { home: home.clone() };
 
@@ -181,19 +181,19 @@ async fn history_survives_restart_and_solved_stays_after_resync() {
     let mut store = Store::open(&home.join("state.db")).unwrap();
     let history = store.load_latest_findings().unwrap();
     assert_eq!(history.len(), first.finding_rows);
-    assert!(history.iter().all(|f| !f.solved));
+    assert!(history.iter().all(|f| !f.reviewed));
 
     let fingerprint = history[0].fingerprint.clone();
-    assert_eq!(store.set_solved(&fingerprint, true).unwrap(), 1);
-    let solved_row = store
+    assert_eq!(store.set_reviewed(&fingerprint, true).unwrap(), 1);
+    let reviewed_row = store
         .load_latest_findings()
         .unwrap()
         .into_iter()
         .find(|f| f.fingerprint == fingerprint)
-        .expect("history harus tetap ada setelah ditandai solved");
-    assert!(solved_row.solved);
+        .expect("history harus tetap ada setelah ditandai reviewed");
+    assert!(reviewed_row.reviewed);
 
-    // sync lagi: solved harus tetap (append, bukan reset)
+    // sync lagi: reviewed harus tetap (append, bukan reset)
     drop(store);
     runner::run_selected(&cfg, &rules, &paths, None, |_| {})
         .await
@@ -204,7 +204,7 @@ async fn history_survives_restart_and_solved_stays_after_resync() {
         .iter()
         .find(|f| f.fingerprint == fingerprint)
         .expect("temuan tetap ada setelah sync");
-    assert!(kept.solved, "sync ulang tidak boleh menghapus solved");
+    assert!(kept.reviewed, "sync ulang tidak boleh menghapus reviewed");
     assert!(kept.occurrences >= 2);
 
     let _ = std::fs::remove_dir_all(&home);

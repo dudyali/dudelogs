@@ -216,7 +216,7 @@ pub fn group(findings: &[Finding], rules: &Rules) -> Vec<FindingGroup> {
             first_seen: f.first_seen.clone(),
             last_seen: f.last_seen.clone(),
             event_time: String::new(),
-            solved: f.solved,
+            reviewed: f.reviewed,
             excerpt: f.excerpt.clone(),
             plan: rules.plan_for(f),
         });
@@ -235,8 +235,8 @@ pub fn group(findings: &[Finding], rules: &Rules) -> Vec<FindingGroup> {
         if entry.event_time.is_empty() && !f.event_time.is_empty() {
             entry.event_time = f.event_time.clone();
         }
-        // solved hanya jika SEMUA target untuk fingerprint ini sudah ditandai
-        entry.solved &= f.solved;
+        // reviewed hanya jika SEMUA target untuk fingerprint ini sudah ditandai
+        entry.reviewed &= f.reviewed;
         if !f.last_seen.is_empty()
             && (entry.last_seen.is_empty() || f.last_seen > entry.last_seen)
         {
