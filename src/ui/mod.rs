@@ -411,6 +411,7 @@ impl DudelogsApp {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
+                logo(ui, 22.0);
                 ui.heading("dudelogs");
                 ui.label(egui::RichText::new("error -> fix plan").weak().small());
                 ui.separator();
@@ -860,7 +861,7 @@ impl DudelogsApp {
                             });
                         ui.label(
                             egui::RichText::new(
-                                "Satu path per baris (Laravel: /var/www/<app>/storage/logs/laravel.log). Karakter aman: huruf, angka, / . _ - * ? [ ] : @ +",
+                                "Satu path per baris. Tanpa wildcard = selalu dibaca (mis. error.log); *.log dibatasi 10 file terbaru. Karakter aman: huruf, angka, / . _ - * ? [ ] : @ +",
                             )
                             .small()
                             .weak(),
@@ -1356,6 +1357,43 @@ struct ConnInput {
     auth_method: String,
     password: String,
     probes: Vec<String>,
+}
+
+/// Logo yang sama dengan assets/icon.svg, digambar langsung (tanpa decode PNG).
+fn logo(ui: &mut egui::Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    let bg = egui::Color32::from_rgb(0x2b, 0x36, 0x48);
+    let bar = egui::Color32::from_rgb(0x8f, 0xa3, 0xb8);
+    let red = egui::Color32::from_rgb(0xe8, 0x64, 0x52);
+    let green = egui::Color32::from_rgb(0x3f, 0xa6, 0x6b);
+    let white = egui::Color32::WHITE;
+
+    painter.rect_filled(rect, egui::Rounding::same(size * 0.22), bg);
+
+    let bars = [
+        (0.18, 0.30, 0.52, bar),
+        (0.18, 0.45, 0.34, bar),
+        (0.18, 0.60, 0.42, red),
+    ];
+    for (x, y, w, color) in bars {
+        let min = rect.min + egui::vec2(size * x, size * y);
+        let bar_rect = egui::Rect::from_min_size(min, egui::vec2(size * w, size * 0.09));
+        painter.rect_filled(bar_rect, egui::Rounding::same(size * 0.045), color);
+    }
+
+    let center = rect.min + egui::vec2(size * 0.71, size * 0.71);
+    painter.circle_filled(center, size * 0.15, bg);
+    painter.circle_filled(center, size * 0.125, green);
+    let check = vec![
+        center + egui::vec2(-size * 0.06, 0.0),
+        center + egui::vec2(-size * 0.015, size * 0.045),
+        center + egui::vec2(size * 0.07, -size * 0.045),
+    ];
+    painter.add(egui::Shape::line(
+        check,
+        egui::Stroke::new(size * 0.045, white),
+    ));
 }
 
 fn validate_conn(f: &ConnForm) -> Result<ConnInput, String> {

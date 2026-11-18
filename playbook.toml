@@ -190,7 +190,7 @@ risk = "medium"
 [[rule]]
 id = "applog.php_memory"
 match = { source = "applog", message_regex = "(?i)Allowed memory size.*exhausted|memory_limit" }
-severity_min = "critical"
+severity_min = "error"
 cause = "PHP kehabisan memory_limit saat request/queue. Bisa query besar, loop tak berujung, atau limit terlalu kecil."
 steps = [
   "cek limit aktif: php -i | grep -E 'memory_limit|max_execution_time'",
@@ -202,9 +202,153 @@ verify = "php -r 'echo ini_get(\"memory_limit\");'"
 risk = "medium - naikkan limit sebagai tindakan sementara"
 
 [[rule]]
+id = "applog.php_null_access"
+match = { source = "applog", message_regex = "(?i)attempt to read property.*on null|trying to access array offset on (value of type )?null|call to a member function.*on null|property .* does not exist on null" }
+severity_min = "error"
+cause = "Ada akses properti/method pada nilai null di {{file}} baris {{line}}. Biasanya data opsional dianggap selalu ada."
+steps = [
+  "buka {{file}} baris {{line}} (kalau kosong, lihat frame #0 di excerpt)",
+  "pakai nullsafe: $obj->relasi->field menjadi $obj->relasi?->field; method: $obj?->method()",
+  "beri default eksplisit: $value = $obj->field ?? null; atau optional($obj)->field",
+  "untuk Eloquent: ->with('relasi') lalu firstOrFail(), dan cek null sebelum dipakai",
+  "tambahkan test dengan input yang membuat relasi/field kosong",
+]
+verify = "php artisan test --filter=nama_test_terkait"
+risk = "low - nullsafe bisa menyembunyikan data yang seharusnya wajib"
+
+[[rule]]
+id = "applog.php_undefined_member"
+match = { source = "applog", message_regex = "(?i)call to undefined (method|function)|undefined property" }
+severity_min = "error"
+cause = "Method/function/properti tidak ditemukan di {{file}} baris {{line}}. Biasanya typo, import salah, atau versi package berbeda."
+steps = [
+  "buka {{file}} baris {{line}} dan cek nama yang dipanggil",
+  "cek versi package: composer show (paket terkait), lalu composer why-not kalau versi tidak sesuai",
+  "pastikan namespace dan use statement benar, serta trait/parent class memuat method itu",
+  "setelah update dependency: composer dump-autoload; php artisan clear-compiled",
+  "jalankan ulang test yang mencakup pemanggilan tersebut",
+]
+verify = "composer dump-autoload"
+risk = "low"
+
+[[rule]]
+id = "applog.php_class_not_found"
+match = { source = "applog", message_regex = "(?i)class .+ not found|target class .+ does not exist" }
+severity_min = "error"
+cause = "Class tidak ditemukan saat runtime. Namespace/import salah, autoload belum di-generate, atau path case-sensitive."
+steps = [
+  "baca nama class di pesan error dan cek file+namespace-nya",
+  "cek use statement / nama class di {{file}} baris {{line}}",
+  "regenerate autoload: composer dump-autoload",
+  "cek binding container/provider bila class di-resolve lewat DI atau config",
+  "pastikan nama file dan folder sama persis (Linux case-sensitive)",
+]
+verify = "composer dump-autoload"
+risk = "low"
+
+[[rule]]
+id = "applog.php_undefined_var"
+match = { source = "applog", message_regex = "(?i)undefined variable|undefined array key" }
+severity_min = "error"
+cause = "Variabel/key array dibaca sebelum diisi di {{file}} baris {{line}}."
+steps = [
+  "buka {{file}} baris {{line}}",
+  "pakai default: $value = $data['key'] ?? null; atau isset($data['key'])",
+  "untuk input request: validasi dulu (Validator/FormRequest) lalu pakai $request->validated()",
+  "tambahkan test dengan payload tanpa key tersebut",
+]
+verify = "php artisan test --filter=nama_test_terkait"
+risk = "low"
+
+[[rule]]
+id = "applog.php_too_few_args"
+match = { source = "applog", message_regex = "(?i)too few arguments to function" }
+severity_min = "error"
+cause = "Signature function berubah tapi pemanggilnya belum. Terjadi di {{file}} baris {{line}}."
+steps = [
+  "buka {{file}} baris {{line}} dan lihat fungsi yang dipanggil",
+  "cari semua pemanggil: grep -rn 'namaFungsi(' app/",
+  "samakan jumlah argumen, atau beri nilai default pada parameter baru",
+  "jalankan test yang mencakup fungsi tersebut",
+]
+verify = "php artisan test"
+risk = "low"
+
+[[rule]]
+id = "applog.laravel_route"
+match = { source = "applog", message_regex = '(?i)route \[(?P<route>[^\]]+)\] not defined' }
+severity_min = "error"
+cause = "Nama route {{route}} tidak terdaftar. Bisa typo, route belum di-load, atau cache route lama."
+steps = [
+  "cek route: php artisan route:list --name={{route}}",
+  "cari pemakaian: grep -rn '{{route}}' routes/ app/ resources/",
+  "bandingkan nama di routes/web.php atau api.php (termasuk prefix/group)",
+  "bersihkan cache: php artisan route:clear; php artisan config:clear",
+]
+verify = "php artisan route:list --name={{route}}"
+risk = "low"
+
+[[rule]]
+id = "applog.laravel_csrf"
+match = { source = "applog", message_regex = "(?i)csrf token mismatch|419 page expired" }
+severity_min = "error"
+cause = "Token CSRF/session tidak cocok. Umumnya cookie domain/SESSION_DRIVER salah, form tanpa token, atau request dari domain berbeda."
+steps = [
+  "cek form memuat @csrf atau header X-CSRF-TOKEN",
+  "cek SESSION_DRIVER, SESSION_DOMAIN, dan APP_URL di .env project {{project}}",
+  "untuk SPA/API: pastikan Sanctum + cookie domain benar",
+  "untuk webhook/endpoint stateless: kecualikan di VerifyCsrfToken dengan alasan jelas",
+]
+verify = "php artisan route:list --path=login"
+risk = "low"
+
+[[rule]]
+id = "applog.php_timeout"
+match = { source = "applog", message_regex = "(?i)maximum execution time" }
+severity_min = "error"
+cause = "Request/queue melewati batas waktu eksekusi di {{file}} baris {{line}}. Biasanya query/loop besar atau I/O lambat."
+steps = [
+  "buka {{file}} baris {{line}} dan cari loop/query tanpa batas",
+  "pakai chunk()/cursor() atau paginate() daripada get() untuk data besar",
+  "pindahkan proses berat ke queue job dengan timeout yang sesuai",
+  "ukur: php artisan tinker dengan query yang sama + hitung durasi",
+]
+verify = "php artisan test --filter=nama_test_terkait"
+risk = "medium - set_time_limit hanya menunda masalah"
+
+[[rule]]
+id = "applog.php_file_missing"
+match = { source = "applog", message_regex = "(?i)failed to open stream.*no such file or directory|file_put_contents.*no such file" }
+severity_min = "error"
+cause = "File/folder tidak ditemukan saat dibaca/ditulis di {{file}} baris {{line}}."
+steps = [
+  "jalankan: php artisan storage:link",
+  "cek path di config/filesystems.php dan pastikan file benar ada: ls -l (path dari pesan error)",
+  "cek permission storage/ dan bootstrap/cache (owner user php-fpm)",
+  "pastikan direktori dibuat (mkdir -p) di deploy, bukan saat runtime",
+]
+verify = "php artisan storage:link"
+risk = "low"
+
+[[rule]]
+id = "applog.queue_max_attempts"
+match = { source = "applog", message_regex = "(?i)MaxAttemptsExceededException|has been attempted too many times" }
+severity_min = "error"
+cause = "Job queue gagal setelah batas percobaan. Bisa error tetap di job, timeout worker, atau retry terlalu agresif."
+steps = [
+  "lihat job gagal: php artisan queue:failed",
+  "inspeksi payload/exception job tersebut, lalu perbaiki penyebabnya",
+  "atur retry/backoff di class job: public $tries, public $backoff, public $timeout",
+  "pastikan job idempoten sebelum queue:retry",
+  "setelah benar: php artisan queue:retry (id dari queue:failed)",
+]
+verify = "php artisan queue:failed"
+risk = "medium"
+
+[[rule]]
 id = "applog.panic"
 match = { source = "applog", message_regex = "(?i)panic|fatal" }
-severity_min = "critical"
+severity_min = "error"
 cause = "Aplikasi crash (panic/fatal). Biasanya bug atau input tak terduga, bukan masalah infra."
 steps = [
   "ambil 50 baris sebelum baris error: tail -n 300 {{path}}",

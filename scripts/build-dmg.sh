@@ -62,6 +62,11 @@ echo "==> buat dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
+# ikon volume dmg (kalau SetFile tersedia dari Xcode CLT)
+if [ -f assets/AppIcon.icns ] && command -v SetFile >/dev/null 2>&1; then
+  cp assets/AppIcon.icns "$STAGE/.VolumeIcon.icns"
+  SetFile -a C "$STAGE"
+fi
 DMG="$DIST/$APP_NAME-$VERSION-$ARCH.dmg"
 hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"

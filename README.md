@@ -55,7 +55,15 @@ Buka dmg → drag **dudelogs** ke **Applications**. Tidak perlu Terminal setelah
 - Binary di-sign **ad-hoc** (gratis). Di Mac ini langsung jalan; di Mac lain Gatekeeper bisa
   menolak → klik kanan app → **Open** sekali, atau izinkan di
   System Settings → Privacy & Security.
-- Ikon custom: taruh `assets/AppIcon.icns` sebelum build; script akan memasukkannya.
+- Ikon aplikasi: `assets/AppIcon.icns` (sumber desain `assets/icon.svg`, render
+  1024px di `assets/icon-1024.png`). Build script menyalinnya ke bundle dan mengisi
+  `CFBundleIconFile`. Logo yang sama digambar ulang di header app.
+  Regenerate icns setelah mengubah svg:
+  ```sh
+  qlmanage -t -s 1024 -o /tmp assets/icon.svg
+  cp /tmp/icon.svg.png assets/icon-1024.png
+  # buat iconset 16..1024 lalu: iconutil -c icns /tmp/AppIcon.iconset -o assets/AppIcon.icns
+  ```
 - Installer tidak menyentuh data: koneksi/report tetap di `~/.dudelogs`.
 
 Kalau dibuka dari Finder, `SSH_AUTH_SOCK` diambil dari `launchctl getenv` supaya ssh-agent
@@ -165,7 +173,7 @@ probe sebagai channel di atasnya:
 | `journal` | `journalctl -p 3 -o json --since '-2 hours' -n 500` | per VM |
 | `docker` | `docker ps` (exited/dead/restarting) | per VM |
 | `resources` | `df -P`, `/proc/meminfo`, `/proc/loadavg` | per VM |
-| `applog` | `tail -n 2000 <path project>` lalu parsing record di lokal | per project |
+| `applog` | path tanpa wildcard selalu dibaca; glob (`*.log`) dibatasi 10 file terbaru; `tail -n 400` per file, guard `timeout 15`, parsing record di lokal | per project |
 | extra | perintah bebas dari form project | per project |
 
 ### Setup Laravel
@@ -251,6 +259,16 @@ Rule dicocokkan berurutan (first match menang); taruh yang paling spesifik di at
 `severity_min` menyaring rule untuk temuan ringan. Tanpa rule, temuan tetap tampil dengan
 triage generik dan `confidence: low` — bukan plan karangan.
 
+Variabel template: `{{unit}}`, `{{path}}` (path log lengkap), `{{file}}`/`{{line}}` (dari
+stack trace `#0 ...File.php(42)`), `{{target}}`, `{{project}}`, `{{message}}`, plus named
+capture dari `message_regex` (mis. `(?P<proc>...)` → `{{proc}}`, `(?P<route>...)`).
+
+Default plan untuk error aplikasi berorientasi perbaikan kode: null access (nullsafe
+`?->`, `??`, `optional()`), undefined method/class/variable, too few arguments, route
+tidak terdaftar, CSRF, maximum execution time, file/stream tidak ada, dan queue max
+attempts. Plan infra (disk, OOM, service, container) tetap dipakai untuk sumber non-applog.
+Rule yang dipakai tampil sebagai `rule: <id>` di panel detail dan `Rule: \`<id>\`` di report.
+
 ## Batasan v1
 
 - Read-only: tidak ada eksekusi perbaikan di remote.
@@ -259,7 +277,7 @@ triage generik dan `confidence: low` — bukan plan karangan.
 - Tidak ada alerting, chart historis, server multi-user.
 - Satu sesi per VM (ControlMaster) dengan channel per probe; bukan satu channel persisten
   yang di-streaming, jadi tiap probe tetap punya timeout sendiri.
-- Jendela error terbatas: journal 2 jam terakhir/500 baris, `tail` 2000 baris per path project.
+- Jendela error terbatas: journal 2 jam terakhir/500 baris; applog membaca path eksplisit + 10 file glob terbaru (masing-masing 400 baris) dengan guard 15s.
 
 ## Development
 
@@ -283,6 +301,9 @@ digunakan test agar tidak mengotori `~/.dudelogs`.
 | `Host key verification failed` | `StrictHostKeyChecking=accept-new` dipakai; login manual sekali bila perlu. |
 | Project tidak menghasilkan temuan | Path salah/glob tidak match, log kosong, atau user SSH tidak bisa membaca file. Cek `~/.dudelogs/raw/<run>/<vm>/applog[project].txt`; kalau `tail` gagal, probe juga melaporkan error. |
 | `applog: permission denied` | User SSH tidak bisa baca `storage/logs`. Tambahkan ke grup `www-data`/`adm` atau pakai ACL. |
+| `applog[...]: timeout 20s (proses ssh di-kill)` | Dulu probe membaca 2000 baris dari **semua** file yang match glob (daily log bisa ratusan file) → lewat 20s. Sekarang dibatasi 10 file terbaru × 400 baris + guard 15s. Kalau masih timeout: persempit glob ke `laravel.log` saja atau naikkan `probe_timeout_secs`. |
+| `applog: timeout 15s (file terlalu banyak/besar)` | Guard di VM sendiri yang memotong; output yang sudah terbaca tetap dipakai. Cek jumlah file: `ls -1tL <glob> | wc -l`. |
+| Error baru di `error.log` tidak terbaca | Glob `*.log` hanya mengambil 10 file dengan mtime terbaru. Tambahkan `error.log` sebagai baris path tersendiri: path tanpa wildcard **selalu** dibaca, tidak kena batas 10. Cek urutan di VM: `ls -1tL /path/*.log \| head -12`. |
 | Perubahan TOML tidak berefek | Setelah import pertama, koneksi dikelola di SQLite/UI. |
 | Auth password ditolak (`Permission denied`) | Cek user+password; server harus mengizinkan `PasswordAuthentication yes`. Ganti ke auth key bila server hanya menerima key. |
 | Semua probe satu VM gagal dengan satu pesan `koneksi: ...` | Itu kegagalan sesi (auth/transpor) saat membuat master — perbaiki koneksi, bukan masing-masing probe. |

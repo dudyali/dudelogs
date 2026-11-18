@@ -60,10 +60,41 @@ impl ProbeKind {
                 .into(),
             // Tanpa grep jarak jauh: grouping per record butuh baris stack trace yang
             // tidak match keyword. Filtering dilakukan parser di sisi lokal.
-            ProbeKind::AppLog => format!(
-                "LC_ALL=C sh -c 'tail -n 2000 {}'",
-                log_paths.join(" ")
-            ),
+            // Batasi jumlah file (10 terbaru) dan baris (400/file) supaya tidak
+            // menembus timeout SSH saat storage/logs berisi ratusan file harian.
+            ProbeKind::AppLog => {
+                // Path tanpa wildcard = selalu dibaca (mis. error.log).
+                // Glob dibatasi 10 file terbaru supaya tidak timeout; -L mengikuti symlink
+                // agar urutannya pakai mtime target, bukan mtime symlink lama.
+                let (globs, explicit): (Vec<&String>, Vec<&String>) = log_paths
+                    .iter()
+                    .partition(|p| p.contains(['*', '?', '[']));
+                let glob_src = globs
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let explicit_suffix = if explicit.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " {}",
+                        explicit
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                };
+                format!(
+                    "LC_ALL=C sh -c 'C=$(ls -1tL {} 2>/dev/null | head -n 10); \
+                     F=\"$C{}\"; [ -z \"$F\" ] && exit 0; \
+                     if command -v timeout >/dev/null 2>&1; then \
+                       timeout 15 tail -n 400 $F || {{ echo \"applog: timeout 15s (file terlalu banyak/besar)\" >&2; exit 124; }}; \
+                     else tail -n 400 $F; fi'",
+                    glob_src, explicit_suffix
+                )
+            }
             ProbeKind::Resources => "LC_ALL=C sh -c 'df -P -x tmpfs -x devtmpfs; echo ---; \
                  cat /proc/meminfo; echo ---; cat /proc/loadinfo 2>/dev/null; \
                  cat /proc/loadavg; nproc'"
@@ -127,7 +158,18 @@ pub async fn run_applog(
             findings: applog::parse(conn, project, &out.stdout),
             raw: out.stdout,
         },
-        Err(e) => failed("applog", e),
+        Err(e) => {
+            if e.contains("timeout") {
+                failed(
+                    "applog",
+                    format!(
+                        "{e} - persempit glob (mis. laravel.log saja) atau naikkan probe_timeout_secs"
+                    ),
+                )
+            } else {
+                failed("applog", e)
+            }
+        }
     }
 }
 
@@ -236,5 +278,21 @@ mod tests {
     fn applog_is_not_a_host_probe() {
         assert!(!ProbeKind::AppLog.is_host_probe());
         assert!(ProbeKind::Systemd.is_host_probe());
+    }
+
+    #[test]
+    fn applog_command_is_bounded_and_always_reads_explicit_paths() {
+        let cmd = ProbeKind::AppLog.command(&[
+            "/var/www/app/storage/logs/*.log".to_string(),
+            "/var/www/app/storage/logs/error.log".to_string(),
+        ]);
+        assert!(cmd.contains("ls -1tL /var/www/app/storage/logs/*.log"), "{cmd}");
+        assert!(cmd.contains("head -n 10"), "{cmd}");
+        assert!(cmd.contains("tail -n 400"), "{cmd}");
+        assert!(cmd.contains("timeout 15"), "{cmd}");
+        // path eksplisit tidak boleh ikut kena `head -n 10`
+        let bounded = cmd.split("head -n 10").next().unwrap();
+        assert!(!bounded.contains("error.log"), "path eksplisit ikut dibatasi: {cmd}");
+        assert!(cmd.contains("/var/www/app/storage/logs/error.log"), "{cmd}");
     }
 }

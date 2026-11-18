@@ -83,7 +83,8 @@ async fn db_connections_end_to_end_and_new_flags() {
         .iter()
         .find(|g| g.message.to_lowercase().contains("out of memory"))
         .expect("temuan oom");
-    assert_eq!(oom.plan.rule_id.as_deref(), Some("journal.oom"));
+    assert_eq!(oom.plan.rule_id.as_deref(), Some("journal.oom_kill"));
+    assert!(oom.plan.steps.iter().any(|s| s.contains("shop-api")));
 
     let laravel = first
         .groups

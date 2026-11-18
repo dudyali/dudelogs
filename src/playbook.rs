@@ -113,7 +113,7 @@ impl Rules {
                     continue;
                 }
             }
-            let mut captures: BTreeMap<String, String> = BTreeMap::new();
+            let mut captures: BTreeMap<String, String> = location_captures(f);
             if let Some(re) = &r.message_regex {
                 let Some(caps) = re.captures(&f.message) else {
                     continue;
@@ -145,6 +145,27 @@ impl Rules {
 
 static TEMPLATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*(\w+)\s*\}\}").unwrap());
 
+/// Lokasi kode dari stack trace supaya fix plan menunjuk file/baris nyata.
+static LOCATION: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        Regex::new(r"(?m)^#0\s+([^\s:()]+\.php)\((\d+)\)").unwrap(),
+        Regex::new(r"(?m)at\s+(/[^\s:()]+\.php):(\d+)").unwrap(),
+        Regex::new(r"(?m)(/[^\s:()]+\.php):(\d+)").unwrap(),
+    ]
+});
+
+fn location_captures(f: &Finding) -> BTreeMap<String, String> {
+    let mut caps = BTreeMap::new();
+    for re in LOCATION.iter() {
+        if let Some(c) = re.captures(&f.excerpt) {
+            caps.insert("file".into(), c[1].to_string());
+            caps.insert("line".into(), c[2].to_string());
+            break;
+        }
+    }
+    caps
+}
+
 fn render(template: &str, f: &Finding, captures: &BTreeMap<String, String>) -> String {
     TEMPLATE
         .replace_all(template, |caps: &regex::Captures| {
@@ -168,6 +189,8 @@ fn render(template: &str, f: &Finding, captures: &BTreeMap<String, String>) -> S
                         "path-terkait".to_string()
                     }
                 }
+                "file" => "file-di-stack-trace".to_string(),
+                "line" => "baris-di-stack-trace".to_string(),
                 other => format!("{{{{{other}}}}}"),
             }
         })
@@ -376,5 +399,81 @@ match = { source = "journal", message_regex = "(" }
 cause = "y"
 "#;
         assert!(Rules::from_toml(bad).is_err());
+    }
+}
+
+#[cfg(test)]
+mod code_rule_tests {
+    use super::*;
+    use crate::model::Finding;
+
+    fn finding(source: &str, message: &str, unit: &str) -> Finding {
+        Finding::new(
+            "vm1",
+            "psb-keu",
+            source,
+            crate::model::Severity::Error,
+            message,
+            unit,
+            "",
+        )
+    }
+
+    #[test]
+    fn code_level_rules_cover_common_laravel_errors() {
+        let rules = Rules::from_toml(DEFAULT_PLAYBOOK).unwrap();
+        let cases: &[(&str, &str)] = &[
+            ("production.ERROR: Attempt to read property \"name\" on null", "applog.php_null_access"),
+            ("production.ERROR: Call to undefined method App\\Models\\User::foo()", "applog.php_undefined_member"),
+            ("production.ERROR: Class \"App\\Services\\Foo\" not found", "applog.php_class_not_found"),
+            ("production.ERROR: Undefined array key \"email\"", "applog.php_undefined_var"),
+            ("production.ERROR: Too few arguments to function App\\Foo::bar(), 1 passed", "applog.php_too_few_args"),
+            ("production.ERROR: Route [dashboard] not defined.", "applog.laravel_route"),
+            ("production.ERROR: CSRF token mismatch.", "applog.laravel_csrf"),
+            ("production.ERROR: Maximum execution time of 30 seconds exceeded", "applog.php_timeout"),
+            ("production.ERROR: failed to open stream: No such file or directory", "applog.php_file_missing"),
+            ("production.ERROR: MaxAttemptsExceededException: job attempted too many times", "applog.queue_max_attempts"),
+            ("production.ERROR: Allowed memory size of 134217728 bytes exhausted", "applog.php_memory"),
+        ];
+        for (message, expected) in cases {
+            let plan = rules.plan_for(&finding("applog", message, "laravel.log"));
+            assert_eq!(plan.rule_id.as_deref(), Some(*expected), "msg={message}");
+            let text = std::iter::once(plan.cause.clone())
+                .chain(plan.steps.iter().cloned())
+                .chain(plan.verify.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!text.contains("<container>"), "{expected}");
+            assert!(!text.contains("<path>"), "{expected}");
+            assert!(!text.contains("<port>"), "{expected}");
+        }
+    }
+
+    #[test]
+    fn null_access_plan_has_file_line_and_nullsafe_hint() {
+        let rules = Rules::from_toml(DEFAULT_PLAYBOOK).unwrap();
+        let mut f = finding(
+            "applog",
+            "production.ERROR: Attempt to read property \"name\" on null",
+            "laravel.log",
+        );
+        f.path = "/var/www/app/storage/logs/laravel.log".into();
+        f.excerpt = "#0 /var/www/app/app/Http/UserController.php(42): App\\Http\\UserController->show()".into();
+        let plan = rules.plan_for(&f);
+        let steps = plan.steps.join("\n");
+        assert!(steps.contains("UserController.php"), "{steps}");
+        assert!(steps.contains("baris 42"), "{steps}");
+        assert!(steps.contains("?->"), "{steps}");
+    }
+
+    #[test]
+    fn route_rule_uses_captured_route() {
+        let rules = Rules::from_toml(DEFAULT_PLAYBOOK).unwrap();
+        let plan = rules.plan_for(&finding(
+            "applog",
+            "production.ERROR: Route [dashboard] not defined.",
+            "laravel.log",
+        ));
+        assert!(plan.steps.join("\n").contains("--name=dashboard"), "{:?}", plan.steps);
     }
 }

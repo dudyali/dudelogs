@@ -68,6 +68,21 @@ pub struct Store {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
+        // UI dan runner bisa membuka DB bersamaan; SQLITE_BUSY saat migrasi di-retry.
+        let mut last_err = None;
+        for attempt in 0..5u64 {
+            match Self::open_once(path) {
+                Ok(store) => return Ok(store),
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("gagal membuka DB")))
+    }
+
+    fn open_once(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
